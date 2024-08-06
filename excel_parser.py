@@ -247,6 +247,131 @@ def validate_comparative_trial_balances(ctb_df, mapping_df, output_file_path):
     
     return invalid_entries
 
+def check_balance_sums(ctb_df):
+    """Check if columns C and D sum to zero starting from row 3."""
+    # Calculate the sum of column C (Prior Period Balance) and column D (Current Period Balance)
+    sum_c = round(ctb_df.iloc[1:, 2].sum(), 2)  # Index 2 corresponds to column C, rounding to 2 decimal places
+    sum_d = round(ctb_df.iloc[1:, 3].sum(), 2)  # Index 3 corresponds to column D, rounding to 2 decimal places
+
+    # Print error messages if sums are not zero
+    if sum_c != 0:
+        print("Prior Period Balance does not sum to 0.")
+    if sum_d != 0:
+        print("Current Period Balance does not sum to 0.")
+    else:
+        print("Prior Period Balance and Current Period Balance both sum to 0. ✅")
+
+def process_journal_entries(workbook, sheet_name):
+    """Process columns F and G to update values based on the net difference."""
+    sheet = workbook[sheet_name]
+    last_row = sheet.max_row  # Get the last row based on column A
+
+    # Iterate through each row starting from row 3
+    for row in range(3, last_row + 1):
+        value_f = sheet.cell(row=row, column=6).value or 0  # Use 0 if cell is None
+        value_g = sheet.cell(row=row, column=7).value or 0  # Use 0 if cell is None
+
+        # Calculate the net value
+        net_value = value_f - value_g
+
+        if net_value > 0:
+            # If net value is positive, update column F and set column G to 0
+            sheet.cell(row=row, column=6).value = net_value
+            sheet.cell(row=row, column=7).value = 0
+        elif net_value < 0:
+            # If net value is negative, set column F to 0 and update column G
+            sheet.cell(row=row, column=6).value = 0
+            sheet.cell(row=row, column=7).value = -net_value
+
+        logging.debug(f"Processed row {row}: F={value_f}, G={value_g}, Net={net_value}")
+
+def check_debit_credit_sums(workbook, sheet_name):
+    """Check if the sums of the Debit and Credit columns (F and G) are equal."""
+    sheet = workbook[sheet_name]
+    last_row = sheet.max_row  # Get the last row based on column A
+
+    # Calculate the sums of columns F and G
+    sum_f = sum(sheet.cell(row=row, column=6).value or 0 for row in range(3, last_row + 1))
+    sum_g = sum(sheet.cell(row=row, column=7).value or 0 for row in range(3, last_row + 1))
+
+    # Format the sums as strings with accounting format
+    sum_f_str = f"${sum_f:,.2f}"
+    sum_g_str = f"${sum_g:,.2f}"
+
+    # Check if the sums are equal and print the results
+    if round(sum_f, 2) == round(sum_g, 2):
+        print(f"The sums of the Debit and Credit columns are equal. Both are {sum_f_str}. ✅")
+    else:
+        print(f"The sums of the Debit and Credit columns are not equal. The Debit column sums to {sum_f_str} while the Credit column sums to {sum_g_str}. ❌")
+
+def check_journal_entry_balances(workbook, sheet_name, output_directory):
+    """Check if each journal entry balances and output the results to an Excel file."""
+    sheet = workbook[sheet_name]
+    last_row = sheet.max_row
+
+    journal_entries = {}
+    for row in range(3, last_row + 1):
+        journal_id = sheet.cell(row=row, column=1).value
+        date = sheet.cell(row=row, column=3).value
+        debit = sheet.cell(row=row, column=6).value or 0
+        credit = sheet.cell(row=row, column=7).value or 0
+
+        if journal_id not in journal_entries:
+            journal_entries[journal_id] = {"debit": 0, "credit": 0, "dates": set()}
+
+        journal_entries[journal_id]["debit"] += debit
+        journal_entries[journal_id]["credit"] += credit
+        journal_entries[journal_id]["dates"].add(date)
+
+    je_list_path = os.path.join(output_directory, 'je_list.xlsx')
+    je_workbook = openpyxl.Workbook()
+    je_sheet = je_workbook.active
+    je_sheet.title = "Journal Entries"
+
+    # Add headers
+    headers = ["Journal ID", "Net Balance", "Earliest Date", "Latest Date", "Date Difference (Days)"]
+    for col_num, header in enumerate(headers, start=1):
+        je_sheet.cell(row=1, column=col_num, value=header)
+
+    all_balanced = True
+    for row_num, (journal_id, data) in enumerate(journal_entries.items(), start=2):
+        net_balance = round(data["debit"] - data["credit"], 2)
+        earliest_date = min(data["dates"])
+        latest_date = max(data["dates"])
+        date_difference = (latest_date - earliest_date).days
+
+        # Check if journal entry is balanced
+        if net_balance != 0 or len(data["dates"]) > 1:
+            all_balanced = False
+
+        # Add data to the sheet
+        je_sheet.cell(row=row_num, column=1, value=journal_id)
+        je_sheet.cell(row=row_num, column=2, value=net_balance)
+        je_sheet.cell(row=row_num, column=3, value=earliest_date)
+        je_sheet.cell(row=row_num, column=4, value=latest_date)
+        je_sheet.cell(row=row_num, column=5, value=date_difference)
+
+    # Format column B as Accounting
+    accounting_style = NamedStyle(name="accounting_style_je", number_format='_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)')
+    if "accounting_style_je" not in je_workbook.named_styles:
+        je_workbook.add_named_style(accounting_style)
+
+    for row in range(2, je_sheet.max_row + 1):
+        je_sheet.cell(row=row, column=2).style = "accounting_style_je"
+
+    # Adjust column widths
+    adjust_column_widths(je_workbook, "Journal Entries")
+
+    # Save the workbook
+    je_workbook.save(je_list_path)
+
+    if all_balanced:
+        print("All journal entries balance. ✅")
+        print("All journal lines for each single journal entry occur on the same date. ✅")
+    else:
+        print("There are unbalanced journal entries. See 'je_list.xlsx' ❌")
+        print("There are journal entries with journal lines on different dates. See 'je_list.xlsx' ❌")
+
 def main():
     # Define file names
     input_file_name = 'source_file.xlsx'  # Replace with your actual file name
@@ -277,8 +402,26 @@ def main():
     # Write the data to a new Excel file with additional sheets
     write_excel(df_ctb, df_jel, df_mapping, output_file_path)
 
+    # Load the output workbook to modify data
+    workbook = openpyxl.load_workbook(output_file_path)
+
+    # Process columns F and G in 'Journal Entries & Lines'
+    process_journal_entries(workbook, "Journal Entries & Lines")
+
+    # Save changes to the workbook
+    workbook.save(output_file_path)
+
     # Validate and highlight the 'Comparative Trial Balances' against the 'Mapping Categories'
     invalid_entries = validate_comparative_trial_balances(df_ctb, df_mapping, output_file_path)
+
+    # Check if columns C and D in 'Comparative Trial Balances' sum to zero
+    check_balance_sums(df_ctb)
+
+    # Check if the sums of Debit and Credit columns are equal
+    check_debit_credit_sums(workbook, "Journal Entries & Lines")
+
+    # Check if each journal entry balances and write to 'je_list.xlsx'
+    check_journal_entry_balances(workbook, "Journal Entries & Lines", current_directory)
 
     # Print validation results
     if invalid_entries:
@@ -291,7 +434,10 @@ def main():
                 row, category, value = entry
                 print(f"Row {row}: Value '{value}' not valid for category '{category}' in 'Mapping Categories'")
     else:
-        print("All entries in 'Comparative Trial Balances' are valid.")
+        print("----COMPARATIVE TRIAL BALANCE TAB----")
+        print("All Account Types match one of the options on the Mapping Categories tab. ✅")
+        print("All Account Mappings match one of the options on the Mapping Categories tab. ✅")
+        print("All Account Mappings have a matching Account Type. ✅")
 
 if __name__ == '__main__':
     main()
