@@ -268,8 +268,9 @@ def process_journal_entries(workbook, sheet_name):
 
     # Iterate through each row starting from row 3
     for row in range(3, last_row + 1):
-        value_f = sheet.cell(row=row, column=6).value or 0  # Use 0 if cell is None
-        value_g = sheet.cell(row=row, column=7).value or 0  # Use 0 if cell is None
+        # Ensure blank cells are treated as 0
+        value_f = sheet.cell(row=row, column=6).value or 0
+        value_g = sheet.cell(row=row, column=7).value or 0
 
         # Calculate the net value
         net_value = value_f - value_g
@@ -282,6 +283,10 @@ def process_journal_entries(workbook, sheet_name):
             # If net value is negative, set column F to 0 and update column G
             sheet.cell(row=row, column=6).value = 0
             sheet.cell(row=row, column=7).value = -net_value
+        else:
+            # If net value is zero, ensure both columns F and G are set to 0
+            sheet.cell(row=row, column=6).value = 0
+            sheet.cell(row=row, column=7).value = 0
 
         logging.debug(f"Processed row {row}: F={value_f}, G={value_g}, Net={net_value}")
 
@@ -372,6 +377,41 @@ def check_journal_entry_balances(workbook, sheet_name, output_directory):
         print("There are unbalanced journal entries. See 'je_list.xlsx' ❌")
         print("There are journal entries with journal lines on different dates. See 'je_list.xlsx' ❌")
 
+def check_account_id_in_ctb(workbook, jel_df, ctb_df, output_file_path):
+    """Ensure each unique account ID in column D of Journal Entries & Lines exists in column A of Comparative Trial Balances."""
+    jel_account_ids = jel_df['Account ID'].astype(str).unique()
+    ctb_account_ids = ctb_df['Account ID'].astype(str).tolist()
+
+    workbook_ctb = openpyxl.load_workbook(output_file_path)
+    sheet_ctb = workbook_ctb["Comparative Trial Balances"]
+
+    # Define the fill for highlighting added accounts
+    highlight_fill = PatternFill(start_color="F7B4AE", end_color="F7B4AE", fill_type="solid")  # Yellow fill
+
+    for account_id in jel_account_ids:
+        if account_id not in ctb_account_ids:
+            print(f"This account {account_id} wasn't found in the Trial Balance. Adding to the Trial Balance with a $0 beginning and ending balance. Make sure to complete the account mapping for this account! ⚠️")
+            
+            # Append the account ID to the first available row in the Comparative Trial Balances sheet
+            last_row = sheet_ctb.max_row + 1
+            sheet_ctb.cell(row=last_row, column=1, value=account_id)
+            sheet_ctb.cell(row=last_row, column=2, value=account_id)
+            
+            # Add 0 balances to columns C and D with accounting format
+            zero_cell_c = sheet_ctb.cell(row=last_row, column=3, value=0)
+            zero_cell_c.style = "accounting_style"
+            zero_cell_d = sheet_ctb.cell(row=last_row, column=4, value=0)
+            zero_cell_d.style = "accounting_style"
+            
+            # Highlight columns E, F, and G
+            for col in range(5, 8):
+                sheet_ctb.cell(row=last_row, column=col).fill = highlight_fill
+
+            # Add the new account ID to the list
+            ctb_account_ids.append(account_id)
+
+    workbook_ctb.save(output_file_path)
+
 def main():
     # Define file names
     input_file_name = 'source_file.xlsx'  # Replace with your actual file name
@@ -411,21 +451,17 @@ def main():
     # Save changes to the workbook
     workbook.save(output_file_path)
 
+    print("----COMPARATIVE TRIAL BALANCE TAB----")
+
     # Validate and highlight the 'Comparative Trial Balances' against the 'Mapping Categories'
     invalid_entries = validate_comparative_trial_balances(df_ctb, df_mapping, output_file_path)
 
     # Check if columns C and D in 'Comparative Trial Balances' sum to zero
     check_balance_sums(df_ctb)
 
-    # Check if the sums of Debit and Credit columns are equal
-    check_debit_credit_sums(workbook, "Journal Entries & Lines")
-
-    # Check if each journal entry balances and write to 'je_list.xlsx'
-    check_journal_entry_balances(workbook, "Journal Entries & Lines", current_directory)
-
     # Print validation results
     if invalid_entries:
-        print("Invalid entries found in 'Comparative Trial Balances':")
+        print("Invalid mappings found in the 'Comparative Trial Balances' tab:")
         for entry in invalid_entries:
             if len(entry) == 2:
                 row, category = entry
@@ -434,10 +470,20 @@ def main():
                 row, category, value = entry
                 print(f"Row {row}: Value '{value}' not valid for category '{category}' in 'Mapping Categories'")
     else:
-        print("----COMPARATIVE TRIAL BALANCE TAB----")
         print("All Account Types match one of the options on the Mapping Categories tab. ✅")
         print("All Account Mappings match one of the options on the Mapping Categories tab. ✅")
         print("All Account Mappings have a matching Account Type. ✅")
+
+    print("----JOURNAL ENTRIES & LINES TAB----")
+
+    # Check if the sums of Debit and Credit columns are equal
+    check_debit_credit_sums(workbook, "Journal Entries & Lines")
+
+    # Check if each journal entry balances and write to 'je_list.xlsx'
+    check_journal_entry_balances(workbook, "Journal Entries & Lines", current_directory)
+
+    # Check if all account IDs in Journal Entries & Lines exist in Comparative Trial Balances
+    check_account_id_in_ctb(workbook, df_jel, df_ctb, output_file_path)
 
 if __name__ == '__main__':
     main()
