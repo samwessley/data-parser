@@ -4,7 +4,6 @@ import os
 from openpyxl.styles import PatternFill, Font, Alignment, NamedStyle
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, messagebox
-import sys
 import logging
 
 # Set up logging for debugging
@@ -370,16 +369,25 @@ def download_file():
     save_path = filedialog.asksaveasfilename(
         initialdir=os.path.expanduser('~'),
         title="Save output file as",
-        filetypes=[("Excel files", "*.xlsx *.xls")]
+        defaultextension=".xlsx",
+        filetypes=[("Excel files", "*.xlsx")]
     )
     if save_path:
         try:
+            # Move both output files to the selected location
             output_file_name = 'output_file.xlsx'
+            je_list_name = 'je_list.xlsx'
             output_file_path = os.path.join(os.path.expanduser('~'), 'Downloads', output_file_name)
+            je_list_path = os.path.join(os.path.expanduser('~'), 'je_list.xlsx')
             os.rename(output_file_path, save_path)
-            messagebox.showinfo("Success", f"File saved as {save_path}")
+
+            # Construct the save path for je_list.xlsx in the same directory as the main output file
+            je_save_path = os.path.join(os.path.dirname(save_path), je_list_name)
+            os.rename(je_list_path, je_save_path)
+
+            messagebox.showinfo("Success", f"Files saved to {save_path} and {je_save_path}")
         except Exception as e:
-            messagebox.showerror("Error", f"Could not save the file: {str(e)}")
+            messagebox.showerror("Error", f"Could not save the files: {str(e)}")
 
 # Initialize global variables
 input_file_path = ""
